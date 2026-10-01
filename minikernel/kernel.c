@@ -206,12 +206,20 @@ static void int_terminal(){
  */
 static void int_reloj(){
 
-	printk("-> TRATANDO INT. DE RELOJ\n");
+	BCP *p = lista_dormidos.primero;
+    BCP *sig;
 
-	// modificar para incluir los itck de HAL.h y así contar segundos para dormir
-	// usar espera_int
-
-        return;
+    while (p != NULL){
+        sig = p->siguiente;          // guardar ANTES de mover el BCP
+        p->ticks--;
+        if (p->ticks <= 0){
+            p->estado = LISTO;
+            eliminar_elem(&lista_dormidos, p);   // 1º sacar de dormidos
+            insertar_ultimo(&lista_listos, p);   // 2º meter en listos
+        }
+        p = sig;
+    }
+    return;
 }
 
 /*
@@ -350,28 +358,44 @@ int sis_dormir(){
 	insertar elemento en cola de dormidos
 	y cuando se termine el bloqueo se elimina el elemento de dormidos y pasar a lista de listos
 	*/
-	unsigned int segundos;
-	BCP *p_proc;
-	segundos = (unsigned int)leer_registro(1);
+	unsigned int segundos = (unsigned int)leer_registro(1);
+	int nivel = fijar_nivel_int(NIVEL_3);
 
+
+	BCP *p_proc_anterior = p_proc_actual;
+	p_proc_anterior->estado = BLOQUEADO;
+	p_proc_anterior->ticks = segundos * TICK;
+
+	eliminar_primero(&lista_listos);
+	insertar_ultimo(&lista_dormidos, p_proc_anterior);
+
+	p_proc_actual = planificador();
+	p_proc_actual->estado = EJECUCION;
+
+	cambio_contexto(&(p_proc_anterior->contexto_regs), &(p_proc_actual->contexto_regs));
+
+	fijar_nivel_int(nivel);
+	return 0;
+
+	/*
 	insertar_ultimo(&lista_dormidos, p_proc);
 
-	// eliminar de lista
+	eliminar de lista
 	BCP * p_proc_anterior;
 
-	liberar_imagen(p_proc_actual->info_mem); /* liberar mapa */
+	liberar_imagen(p_proc_actual->info_mem);  liberar mapa 
 
 	p_proc_actual->estado=LISTO;
-	eliminar_primero(&lista_dormidos); /* proc. fuera de listos */
+	eliminar_primero(&lista_dormidos);  proc. fuera de listos 
 
-	/* Realizar cambio de contexto */
+	Realizar cambio de contexto 
 	p_proc_anterior=p_proc_actual;
 	p_proc_actual=planificador();
 
 
-	// BCP->ticks 100 tick = 1 segundo
+	BCP->ticks 100 tick = 1 segundo
 
-	return 0;
+	return 0;*/
 }
 
 /*

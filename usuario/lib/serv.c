@@ -44,9 +44,9 @@ int escribir(char *texto, unsigned int longi){
 	return llamsis(ESCRIBIR, 2, (long)texto, (long)longi);
 }
 int obtener_id_pr(){
-   return llamsis(OBTENER_ID_PROCESO, 3);
+   return llamsis(OBTENER_ID_PROCESO, 0);
 }
 int dormir(unsigned int segundos){
-   return llamsis(DORMIR, 4, (long) segundos);
+   return llamsis(DORMIR, 1, (long) segundos);
 }
 
