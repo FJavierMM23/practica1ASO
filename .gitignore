@@ -10,3 +10,8 @@ init
 excep_mem
 excep_arit
 dormilon
+libserv.a
+serv.o
+
+kernel
+kernel.o
