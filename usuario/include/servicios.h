@@ -22,6 +22,9 @@
 /* Evita el uso del printf de la bilioteca est�ndar */
 #define printf escribirf
 
+#define NO_RECURSIVO 0
+#define RECURSIVO 1
+
 /* Funcion de biblioteca */
 int escribirf(const char *formato, ...);
 
@@ -31,6 +34,11 @@ int terminar_proceso();
 int escribir(char *texto, unsigned int longi);
 int obtener_id_pr();
 int dormir(unsigned int segundos);
+int crear_mutex(char *nombre, int tipo);
+int abrir_mutex(char *nombre);
+int lock(unsigned int mutexid);
+int unlock(unsigned int mutexid);
+int cerrar_mutex(unsigned int mutexid);
 
 #endif /* SERVICIOS_H */
 

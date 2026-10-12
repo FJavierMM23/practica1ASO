@@ -14,6 +14,7 @@
  */
 
 #include "kernel.h"	/* Contiene defs. usadas por este modulo */
+#include <string.h>
 
 /*
  *
@@ -26,10 +27,27 @@
  * Funci�n que inicia la tabla de procesos
  */
 static void iniciar_tabla_proc(){
+	int i, j;
+
+	for (i=0; i<MAX_PROC; i++){
+		tabla_procs[i].estado=NO_USADA;
+		for (j=0; j<NUM_MUT_PROC; j++)
+			tabla_procs[i].desc_mut[j] = -1;
+	}
+}
+
+/*
+ * Funcion que inicia la tabla de mutex
+ */
+static void iniciar_tabla_mutex(){
 	int i;
 
-	for (i=0; i<MAX_PROC; i++)
-		tabla_procs[i].estado=NO_USADA;
+	for (i=0; i<NUM_MUT; i++){
+		tabla_mutex[i].usado = 0;
+		tabla_mutex[i].propietario = NULL;
+		tabla_mutex[i].bloqueados.primero = NULL;
+		tabla_mutex[i].bloqueados.ultimo = NULL;
+	}
 }
 
 /*
@@ -122,6 +140,98 @@ static BCP * planificador(){
 	return lista_listos.primero;
 }
 
+/* Bloquea al proceso actual en la lista indicada (como sis_dormir) */
+static void bloquear_actual(lista_BCPs *lista) {
+    int nivel = fijar_nivel_int(NIVEL_3);
+    BCP *anterior = p_proc_actual;
+
+    anterior->estado = BLOQUEADO;
+    eliminar_primero(&lista_listos);
+    insertar_ultimo(lista, anterior);
+
+    p_proc_actual = planificador();
+    p_proc_actual->estado = EJECUCION;
+    /* con round robin: reponer aquí la rodaja completa */
+    cambio_contexto(&(anterior->contexto_regs), &(p_proc_actual->contexto_regs));
+
+    fijar_nivel_int(nivel);
+}
+
+/* Pasa un BCP de una lista de bloqueados a listos */
+static void desbloquear(BCP *p, lista_BCPs *origen) {
+    int nivel = fijar_nivel_int(NIVEL_3);
+    eliminar_elem(origen, p);
+    p->estado = LISTO;
+    insertar_ultimo(&lista_listos, p);
+    fijar_nivel_int(nivel);
+}
+
+/* Indice en tabla_mutex del mutex con ese nombre, o -1 */
+static int buscar_mutex(char *nombre) {
+    int i;
+    for (i = 0; i < NUM_MUT; i++)
+        if (tabla_mutex[i].usado && strcmp(tabla_mutex[i].nombre, nombre) == 0)
+            return i;
+    return -1;
+}
+
+/* Indice de entrada libre en tabla_mutex, o -1 */
+static int buscar_mutex_libre() {
+    int i;
+    for (i = 0; i < NUM_MUT; i++)
+        if (!tabla_mutex[i].usado) return i;
+    return -1;
+}
+
+/* Descriptor libre del proceso actual, o -1 */
+static int buscar_desc_libre() {
+    int i;
+    for (i = 0; i < NUM_MUT_PROC; i++)
+        if (p_proc_actual->desc_mut[i] < 0) return i;
+    return -1;
+}
+
+/* 1 si el descriptor es valido para el proceso actual */
+static int desc_valido(unsigned int desc) {
+    int idx;
+    if (desc >= NUM_MUT_PROC) return 0;
+    idx = p_proc_actual->desc_mut[desc];
+    if (idx < 0 || idx >= NUM_MUT || !tabla_mutex[idx].usado) return 0;
+    return 1;
+}
+
+/* Libera el mutex y traspasa la propiedad al primer bloqueado, si lo hay */
+static void liberar_propiedad(mutex_t *m) {
+    BCP *p = m->bloqueados.primero;
+    m->propietario = NULL;
+    m->n_locks = 0;
+    if (p != NULL) {
+        desbloquear(p, &m->bloqueados);
+        m->propietario = p;
+        m->n_locks = 1;
+    }
+}
+
+/* Cierra un descriptor del proceso actual (usada por cerrar_mutex
+   y por liberar_proceso) */
+static void cerrar_mutex_interno(unsigned int desc) {
+    int idx = p_proc_actual->desc_mut[desc];
+    mutex_t *m = &tabla_mutex[idx];
+
+    /* Si lo tiene bloqueado este proceso, se libera sea cual sea el anidamiento */
+    if (m->propietario == p_proc_actual)
+        liberar_propiedad(m);
+
+    m->n_abiertos--;
+    if (m->n_abiertos == 0) {
+        m->usado = 0;
+        num_mutex_usados--;
+        /* Despertar a todos los que esperan para crear: reevalúan en su while */
+        while (lista_esperando_crear.primero != NULL)
+            desbloquear(lista_esperando_crear.primero, &lista_esperando_crear);
+    }
+}
+
 /*
  *
  * Funcion auxiliar que termina proceso actual liberando sus recursos.
@@ -130,6 +240,11 @@ static BCP * planificador(){
  */
 static void liberar_proceso(){
 	BCP * p_proc_anterior;
+
+	int i;
+	for (i=0; i<NUM_MUT_PROC; i++)
+			if (p_proc_actual->desc_mut[i] != -1)
+					cerrar_mutex_interno(i);
 
 	liberar_imagen(p_proc_actual->info_mem); /* liberar mapa */
 
@@ -343,21 +458,6 @@ int sis_obtener_id_pr(){
 }
 
 int sis_dormir(){
-	/* 
-	hay que cambiar el estado a BLOQUEADO del proceso, BCP, y usar los tick para controlar el tiempo
-	una vez hayan pasado los ticks correspondientes, se cambia el estado a EJECUIÓN
-	usar:
-	* Operaci�n de salvaguarda y recuperaci�n de contexto hardware del proceso.
-	* Rutina que realiza el cambio de contexto. Si (contexto_a_salvar==NULL)
-	* no salva contexto, s�lo restaura
-
-	* void cambio_contexto(contexto_t *contexto_a_salvar, contexto_t *contexto_a_restaurar);
-
-	usar int_reloj
-
-	insertar elemento en cola de dormidos
-	y cuando se termine el bloqueo se elimina el elemento de dormidos y pasar a lista de listos
-	*/
 	unsigned int segundos = (unsigned int)leer_registro(1);
 	int nivel = fijar_nivel_int(NIVEL_3);
 
@@ -376,26 +476,99 @@ int sis_dormir(){
 
 	fijar_nivel_int(nivel);
 	return 0;
+}
 
-	/*
-	insertar_ultimo(&lista_dormidos, p_proc);
+int sis_crear_mutex() {
+    char *nombre = (char *)leer_registro(1);
+    int tipo = (int)leer_registro(2);
+    int desc, idx;
 
-	eliminar de lista
-	BCP * p_proc_anterior;
+    if (nombre == NULL || strlen(nombre) >= MAX_NOM_MUT) return -1;
+    if (tipo != RECURSIVO && tipo != NO_RECURSIVO) return -1;
 
-	liberar_imagen(p_proc_actual->info_mem);  liberar mapa 
+    desc = buscar_desc_libre();
+    if (desc < 0) return -1;
 
-	p_proc_actual->estado=LISTO;
-	eliminar_primero(&lista_dormidos);  proc. fuera de listos 
+    while (1) {
+        if (buscar_mutex(nombre) >= 0) return -1;
+        if (num_mutex_usados < NUM_MUT) break;
+        bloquear_actual(&lista_esperando_crear);
+    }
 
-	Realizar cambio de contexto 
-	p_proc_anterior=p_proc_actual;
-	p_proc_actual=planificador();
+    idx = buscar_mutex_libre();
+    tabla_mutex[idx] = (mutex_t){
+        .tipo = tipo, .usado = 1, .propietario = NULL,
+        .n_locks = 0, .n_abiertos = 1, .bloqueados = { NULL, NULL }
+    };
+    strcpy(tabla_mutex[idx].nombre, nombre);
+    num_mutex_usados++;
 
+    p_proc_actual->desc_mut[desc] = idx;
+    return desc;
+}
 
-	BCP->ticks 100 tick = 1 segundo
+int sis_abrir_mutex() {
+    char *nombre = (char *)leer_registro(1);
+    int desc, idx;
 
-	return 0;*/
+    if (nombre == NULL || strlen(nombre) >= MAX_NOM_MUT) return -1;
+
+    desc = buscar_desc_libre();
+    if (desc < 0) return -1;
+
+    idx = buscar_mutex(nombre);
+    if (idx < 0) return -1;
+
+    p_proc_actual->desc_mut[desc] = idx;
+    tabla_mutex[idx].n_abiertos++;
+    return desc;
+}
+
+int sis_lock() {
+    unsigned int desc = (unsigned int)leer_registro(1);
+    mutex_t *m;
+
+    if (!desc_valido(desc)) return -1;
+    m = &tabla_mutex[p_proc_actual->desc_mut[desc]];
+
+    if (m->propietario == NULL) {
+        m->propietario = p_proc_actual;
+        m->n_locks = 1;
+        return 0;
+    }
+    if (m->propietario == p_proc_actual) {
+        if (m->tipo == RECURSIVO) { m->n_locks++; return 0; }
+        return -1;                      /* no recursivo: interbloqueo trivial */
+    }
+
+    bloquear_actual(&m->bloqueados);    /* al despertar, ya somos propietarios */
+    return 0;
+}
+
+int sis_unlock() {
+    unsigned int desc = (unsigned int)leer_registro(1);
+    mutex_t *m;
+
+    if (!desc_valido(desc)) return -1;
+    m = &tabla_mutex[p_proc_actual->desc_mut[desc]];
+
+    if (m->propietario != p_proc_actual) return -1;
+
+    if (m->tipo == RECURSIVO && m->n_locks > 1) {
+        m->n_locks--;
+        return 0;
+    }
+    liberar_propiedad(m);
+    return 0;
+}
+
+int sis_cerrar_mutex() {
+    unsigned int desc = (unsigned int)leer_registro(1);
+
+    if (!desc_valido(desc)) return -1;
+    cerrar_mutex_interno(desc);
+    p_proc_actual->desc_mut[desc] = -1;
+    return 0;
 }
 
 /*
@@ -418,6 +591,7 @@ int main(){
 	iniciar_cont_teclado();		/* inici cont. teclado */
 
 	iniciar_tabla_proc();		/* inicia BCPs de tabla de procesos */
+	iniciar_tabla_mutex();		/* inicia tabla de mutex */
 
 	/* crea proceso inicial */
 	if (crear_tarea((void *)"init")<0)

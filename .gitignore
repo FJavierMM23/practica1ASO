@@ -1,4 +1,31 @@
 yosoy
+yosoy.o
+simplon.o
+prueba_term.o
+prueba_RR2.o
+prueba_RR1.o
+prueba_mutex1.o
+prueba_mutex2
+prueba_mutex2.o
+prueba_dormir.o
+mudo.o
+init.o
+excep_mem.o
+excep_arit.o
+mutex1
+mutex1.o
+mutex2
+mutex2.o
+abridor
+abridor.o
+creador1
+creador1.o
+creador2
+creador2.o
+creador3
+creador3.o
+creador4
+creador4.o
 simplon
 prueba_term
 prueba_RR2
@@ -7,6 +34,7 @@ prueba_mutex1
 prueba_dormir
 mudo
 init
+init.o
 excep_mem
 excep_arit
 dormilon
@@ -15,3 +43,5 @@ serv.o
 
 kernel
 kernel.o
+
+salida.txt
