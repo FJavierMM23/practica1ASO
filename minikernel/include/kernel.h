@@ -94,6 +94,17 @@ int num_mutex_usados = 0;
 lista_BCPs lista_esperando_crear = {NULL, NULL};
 
 /*
+ * Round robin
+ */
+
+/* Ticks que le quedan de rodaja al proceso en ejecución */
+int ticks_rodaja_restantes = TICKS_POR_RODAJA;
+
+/* Proceso al que se pretende expulsar con la interrupción software pendiente.
+   NULL si no hay ningún cambio involuntario pendiente */
+BCP *p_proc_a_expulsar = NULL;
+
+/*
  *
  * Definici�n del tipo que corresponde con una entrada en la tabla de
  * llamadas al sistema.

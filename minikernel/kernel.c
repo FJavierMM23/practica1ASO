@@ -140,6 +140,16 @@ static BCP * planificador(){
 	return lista_listos.primero;
 }
 
+/* Elige el siguiente proceso y le concede una rodaja completa.
+   Hay que llamarla con nivel de interrupcion 3.
+   El cambio_contexto lo hace quien la llama. */
+static void asignar_procesador(){
+	p_proc_actual = planificador();
+	p_proc_actual->estado = EJECUCION;
+	ticks_rodaja_restantes = TICKS_POR_RODAJA;   /* rodaja completa siempre */
+	p_proc_a_expulsar = NULL;                    /* cancela cualquier int. SW pendiente */
+}
+
 /* Bloquea al proceso actual en la lista indicada (como sis_dormir) */
 static void bloquear_actual(lista_BCPs *lista) {
     int nivel = fijar_nivel_int(NIVEL_3);
@@ -149,8 +159,7 @@ static void bloquear_actual(lista_BCPs *lista) {
     eliminar_primero(&lista_listos);
     insertar_ultimo(lista, anterior);
 
-    p_proc_actual = planificador();
-    p_proc_actual->estado = EJECUCION;
+    asignar_procesador();;
     /* con round robin: reponer aquí la rodaja completa */
     cambio_contexto(&(anterior->contexto_regs), &(p_proc_actual->contexto_regs));
 
@@ -239,6 +248,7 @@ static void cerrar_mutex_interno(unsigned int desc) {
  *
  */
 static void liberar_proceso(){
+	int nivel;
 	BCP * p_proc_anterior;
 
 	int i;
@@ -248,12 +258,13 @@ static void liberar_proceso(){
 
 	liberar_imagen(p_proc_actual->info_mem); /* liberar mapa */
 
+	nivel = fijar_nivel_int(NIVEL_3);
 	p_proc_actual->estado=TERMINADO;
 	eliminar_primero(&lista_listos); /* proc. fuera de listos */
 
 	/* Realizar cambio de contexto */
 	p_proc_anterior=p_proc_actual;
-	p_proc_actual=planificador();
+	asignar_procesador();
 
 	printk("-> C.CONTEXTO POR FIN: de %d a %d\n",
 			p_proc_anterior->id, p_proc_actual->id);
@@ -334,7 +345,17 @@ static void int_reloj(){
         }
         p = sig;
     }
-    return;
+
+    /* Round robin: solo gasta rodaja un proceso que realmente ejecuta.
+	   Si esta bloqueado o terminado esperando en espera_int, hace de
+	   proceso nulo y no cuenta. */
+	if (p_proc_actual != NULL && p_proc_actual->estado == EJECUCION){
+		ticks_rodaja_restantes--;
+		if (ticks_rodaja_restantes <= 0 && p_proc_a_expulsar == NULL){
+			p_proc_a_expulsar = p_proc_actual;
+			activar_int_SW();
+		}
+	}
 }
 
 /*
@@ -356,10 +377,29 @@ static void tratar_llamsis(){
  * Tratamiento de interrupciuones software
  */
 static void int_sw(){
+	int nivel = fijar_nivel_int(NIVEL_3);
+	BCP *objetivo = p_proc_a_expulsar;
+	BCP *anterior = p_proc_actual;
 
-	printk("-> TRATANDO INT. SW\n");
+	p_proc_a_expulsar = NULL;
 
-	return;
+	/* Solo se expulsa si sigue ejecutando el proceso al que iba dirigida */
+	if (objetivo == anterior && anterior->estado == EJECUCION){
+		if (lista_listos.primero != lista_listos.ultimo){
+			eliminar_primero(&lista_listos);
+			anterior->estado = LISTO;
+			insertar_ultimo(&lista_listos, anterior);
+
+			asignar_procesador();
+			// printk("-> RR: expulsado %d, entra %d\n", anterior->id, lista_listos.primero->id);
+			cambio_contexto(&(anterior->contexto_regs),
+					&(p_proc_actual->contexto_regs));
+		} else {
+			/* nadie mas listo: sigue con una rodaja nueva */
+			ticks_rodaja_restantes = TICKS_POR_RODAJA;
+		}
+	}
+	fijar_nivel_int(nivel);
 }
 
 /*
@@ -469,8 +509,7 @@ int sis_dormir(){
 	eliminar_primero(&lista_listos);
 	insertar_ultimo(&lista_dormidos, p_proc_anterior);
 
-	p_proc_actual = planificador();
-	p_proc_actual->estado = EJECUCION;
+	asignar_procesador();
 
 	cambio_contexto(&(p_proc_anterior->contexto_regs), &(p_proc_actual->contexto_regs));
 
@@ -598,7 +637,7 @@ int main(){
 		panico("no encontrado el proceso inicial");
 	
 	/* activa proceso inicial */
-	p_proc_actual=planificador();
+	asignar_procesador();
 	cambio_contexto(NULL, &(p_proc_actual->contexto_regs));
 	panico("S.O. reactivado inesperadamente");
 	return 0;
